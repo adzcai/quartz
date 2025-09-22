@@ -13,6 +13,7 @@ import path from "path"
 import { visit } from "unist-util-visit"
 import isAbsoluteUrl from "is-absolute-url"
 import { Root } from "hast"
+import { wikilinkRegex } from "./ofm"
 
 interface Options {
   /** How to resolve Markdown paths */
@@ -32,6 +33,24 @@ const defaultOptions: Options = {
   externalLinkIcon: true,
 }
 
+function* crawlFrontmatter(value: any): Generator<string> {
+  if (typeof value === 'string') {
+    const matches = [...value.matchAll(wikilinkRegex)]
+    if (matches.length === 1) {
+      const rawFp = matches[0][1]
+      yield rawFp
+    }
+  } else if (Array.isArray(value)) {
+    for (const nested of value) {
+      yield* crawlFrontmatter(nested)
+    }
+  } else if (typeof value === 'object' && value !== null) {
+    for (const nested of Object.values(value)) {
+      yield* crawlFrontmatter(nested)
+    }
+  }
+}
+
 export const CrawlLinks: QuartzTransformerPlugin<Partial<Options>> = (userOpts) => {
   const opts = { ...defaultOptions, ...userOpts }
   return {
@@ -46,6 +65,13 @@ export const CrawlLinks: QuartzTransformerPlugin<Partial<Options>> = (userOpts) 
             const transformOptions: TransformOptions = {
               strategy: opts.markdownLinkResolution,
               allSlugs: ctx.allSlugs,
+            }
+
+            const frontmatterLinks = crawlFrontmatter(file.data.frontmatter!)
+            for (const link of frontmatterLinks) {
+              const dest = transformLink(file.data.slug!, link, transformOptions)
+              const full = createFullSlug(dest, curSlug)
+              outgoing.add(simplifySlug(full))
             }
 
             visit(tree, "element", (node, _index, _parent) => {
@@ -109,17 +135,7 @@ export const CrawlLinks: QuartzTransformerPlugin<Partial<Options>> = (userOpts) 
                     transformOptions,
                   )
 
-                  // url.resolve is considered legacy
-                  // WHATWG equivalent https://nodejs.dev/en/api/v18/url/#urlresolvefrom-to
-                  const url = new URL(dest, "https://base.com/" + stripSlashes(curSlug, true))
-                  const canonicalDest = url.pathname
-                  let [destCanonical, _destAnchor] = splitAnchor(canonicalDest)
-                  if (destCanonical.endsWith("/")) {
-                    destCanonical += "index"
-                  }
-
-                  // need to decodeURIComponent here as WHATWG URL percent-encodes everything
-                  const full = decodeURIComponent(stripSlashes(destCanonical, true)) as FullSlug
+                  const full = createFullSlug(dest, curSlug)
                   const simple = simplifySlug(full)
                   outgoing.add(simple)
                   node.properties["data-slug"] = full
@@ -171,4 +187,19 @@ declare module "vfile" {
   interface DataMap {
     links: SimpleSlug[]
   }
+}
+
+function createFullSlug(dest: RelativeURL, curSlug: SimpleSlug) {
+  // url.resolve is considered legacy
+  // WHATWG equivalent https://nodejs.dev/en/api/v18/url/#urlresolvefrom-to
+  const url = new URL(dest, "https://base.com/" + stripSlashes(curSlug, true))
+  const canonicalDest = url.pathname
+  let [destCanonical, _destAnchor] = splitAnchor(canonicalDest)
+  if (destCanonical.endsWith("/")) {
+    destCanonical += "index"
+  }
+
+  // need to decodeURIComponent here as WHATWG URL percent-encodes everything
+  const full = decodeURIComponent(stripSlashes(destCanonical, true)) as FullSlug
+  return full
 }

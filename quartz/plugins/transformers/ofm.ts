@@ -27,6 +27,7 @@ import { toHast } from "mdast-util-to-hast"
 import { toHtml } from "hast-util-to-html"
 import { capitalize } from "../../util/lang"
 import { PluggableList } from "unified"
+import { globFileSync } from "../../util/glob"
 
 export interface Options {
   comments: boolean
@@ -216,21 +217,32 @@ export const ObsidianFlavoredMarkdown: QuartzTransformerPlugin<Partial<Options>>
         return (tree: Root, file) => {
           const replacements: [RegExp, string | ReplaceFunction][] = []
           const base = pathToRoot(file.data.slug!)
+          const embedPaths: FilePath[] = []
 
           if (opts.wikilinks) {
             replacements.push([
               wikilinkRegex,
               (value: string, ...capture: string[]) => {
                 let [rawFp, rawHeader, rawAlias] = capture
-                const fp = rawFp?.trim() ?? ""
+                let fp = (rawFp?.trim() ?? "") as FilePath
                 const anchor = rawHeader?.trim() ?? ""
                 const alias: string | undefined = rawAlias?.slice(1).trim()
 
                 // embed cases
                 if (value.startsWith("!")) {
                   const ext: string = path.extname(fp).toLowerCase()
-                  const url = slugifyFilePath(fp as FilePath)
-                  if ([".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"].includes(ext)) {
+                  const imageExt = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"]
+                  const videoExt = [".mp4", ".webm", ".ogv", ".mov", ".mkv"]
+                  const audioExt = [".mp3", ".webm", ".wav", ".m4a", ".ogg", ".3gp", ".flac"]
+                  const pdfExt = [".pdf"]
+                  const mediaExt = [...imageExt, ...videoExt, ...audioExt, ...pdfExt]
+
+                  if (mediaExt.includes(ext)) {
+                    fp = globFileSync(fp, ctx.argv.directory)[0] ?? fp
+                    embedPaths.push(fp)
+                  }
+                  const url = slugifyFilePath(fp)
+                  if (imageExt.includes(ext)) {
                     const match = wikilinkImageEmbedRegex.exec(alias ?? "")
                     const alt = match?.groups?.alt ?? ""
                     const width = match?.groups?.width ?? "auto"
@@ -246,19 +258,17 @@ export const ObsidianFlavoredMarkdown: QuartzTransformerPlugin<Partial<Options>>
                         },
                       },
                     }
-                  } else if ([".mp4", ".webm", ".ogv", ".mov", ".mkv"].includes(ext)) {
+                  } else if (videoExt.includes(ext)) {
                     return {
                       type: "html",
                       value: `<video src="${url}" controls></video>`,
                     }
-                  } else if (
-                    [".mp3", ".webm", ".wav", ".m4a", ".ogg", ".3gp", ".flac"].includes(ext)
-                  ) {
+                  } else if (audioExt.includes(ext)) {
                     return {
                       type: "html",
                       value: `<audio src="${url}" controls></audio>`,
                     }
-                  } else if ([".pdf"].includes(ext)) {
+                  } else if (pdfExt.includes(ext)) {
                     return {
                       type: "html",
                       value: `<iframe src="${url}" class="pdf"></iframe>`,
@@ -279,7 +289,7 @@ export const ObsidianFlavoredMarkdown: QuartzTransformerPlugin<Partial<Options>>
 
                 // treat as broken link if slug not in ctx.allSlugs
                 if (opts.disableBrokenWikilinks) {
-                  const slug = slugifyFilePath(fp as FilePath)
+                  const slug = slugifyFilePath(fp)
                   const exists = ctx.allSlugs && ctx.allSlugs.includes(slug)
                   if (!exists) {
                     return {
@@ -390,6 +400,8 @@ export const ObsidianFlavoredMarkdown: QuartzTransformerPlugin<Partial<Options>>
             })
           }
           mdastFindReplace(tree, replacements)
+
+          file.data.embedPaths = embedPaths
         }
       })
 
@@ -789,5 +801,6 @@ declare module "vfile" {
     blocks: Record<string, Element>
     htmlAst: HtmlRoot
     hasMermaidDiagram: boolean | undefined
+    embedPaths: FilePath[]
   }
 }

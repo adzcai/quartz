@@ -2,14 +2,7 @@ import { FilePath, joinSegments, slugifyFilePath } from "../../util/path"
 import { QuartzEmitterPlugin } from "../types"
 import path from "path"
 import fs from "fs"
-import { glob } from "../../util/glob"
 import { Argv } from "../../util/ctx"
-import { QuartzConfig } from "../../cfg"
-
-const filesToCopy = async (argv: Argv, cfg: QuartzConfig) => {
-  // glob all non MD files in content folder and copy it over
-  return await glob("**", argv.directory, ["**/*.md", ...cfg.configuration.ignorePatterns])
-}
 
 const copyFile = async (argv: Argv, fp: FilePath) => {
   const src = joinSegments(argv.directory, fp) as FilePath
@@ -28,10 +21,11 @@ const copyFile = async (argv: Argv, fp: FilePath) => {
 export const Assets: QuartzEmitterPlugin = () => {
   return {
     name: "Assets",
-    async *emit({ argv, cfg }) {
-      const fps = await filesToCopy(argv, cfg)
-      for (const fp of fps) {
-        yield copyFile(argv, fp)
+    async *emit({ argv }, content) {
+      for (const [_tree, vfile] of content) {
+        for (const fp of vfile.data.embedPaths!) {
+          yield copyFile(argv, fp)
+        }
       }
     },
     async *partialEmit(ctx, _content, _resources, changeEvents) {
